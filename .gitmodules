@@ -1,3 +1,6 @@
 [submodule "lua"]
 	path = lua
 	url = https://github.com/lua/lua
+[submodule "libffi"]
+	path = libffi
+	url = https://github.com/libffi/libffi
