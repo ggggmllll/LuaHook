@@ -7,7 +7,7 @@ include(ExternalProject)
 find_program(MAKE_EXE make)
 
 ExternalProject_Add(
-    lua 
+    Lua 
     SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/lua
     CONFIGURE_COMMAND ""
     BUILD_COMMAND ${MAKE_EXE} a
@@ -40,3 +40,6 @@ target_include_directories(LuaHook PRIVATE lua)
 target_include_directories(LuaHook PRIVATE libffi/out/include)
 target_link_directories(LuaHook PRIVATE lua)
 target_link_directories(LuaHook PRIVATE libffi/out/lib)
+
+add_dependencies(LuaHook Lua libffi)
+target_link_libraries(LuaHook PRIVATE lua ffi)

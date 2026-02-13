@@ -677,7 +677,7 @@ int unwrapLuaFunction(lua_State* L) {
     return 0;
 }
 
-int luaopen_luahook(lua_State* L) {
+int luaopen_LuaHook(lua_State* L) {
     /* 初始化全局结构体映射（确保 __g_struct_map 已创建） */
     INIT_STRUCTMAP(32);
 
