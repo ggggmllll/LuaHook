@@ -171,7 +171,7 @@ int registerStructType(lua_State* L) {
     STRUCTMAP_PUT(key, type);
     
     if (ffi_get_struct_offsets(__g_abi, &STRUCTMAP_GET(key)->type, offsets) == FFI_BAD_TYPEDEF) 
-        luaL_error(L, "bad typedef");
+        luaL_error(L, "LuaHook: bad typedef");
     
     return 0;
 }
@@ -185,31 +185,23 @@ int unregisterStructType(lua_State* L) {
 }
 
 /* ---------- 从 Lua 值转换为 C 值（分配临时内存，返回指针） ---------- */
-static void* lua_to_cvalue(lua_State* L, int idx, ffi_type* type) {
+static void lua_to_cvalue(lua_State* L, int idx, ffi_type* type, void* out) {
     if (type->type == FFI_TYPE_STRUCT) {
-        /* 处理结构体：Lua 层用数组表示，按 elements 顺序压入 */
         Structure* st = get_structure(type);
-        if (!st) luaL_error(L, "Unknown structure type");
+        if (!st) luaL_error(L, "LuaHook: Unknown structure type");
         luaL_checktype(L, idx, LUA_TTABLE);
-
-        size_t size = type->size;
-        void* buf = alloca(size);
-        memset(buf, 0, size);
 
         ffi_type** elems = type->elements;
         size_t* offsets = st->offsets;
         for (int i = 0; elems[i] != NULL; i++) {
-            lua_rawgeti(L, idx, i + 1);          // Lua 数组从 1 开始
-            void* field_ptr = (char*)buf + offsets[i];
-            void* field_val = lua_to_cvalue(L, -1, elems[i]);
-            size_t field_size = elems[i]->size;
-            memcpy(field_ptr, field_val, field_size);
+            lua_rawgeti(L, idx, i + 1);                // 取数组第 i+1 个元素
+            void* field_ptr = (char*)out + offsets[i];
+            lua_to_cvalue(L, -1, elems[i], field_ptr); // 递归填充字段
             lua_pop(L, 1);
         }
-        return buf;
+        return;
     }
 
-    /* ---------- 基本类型 ---------- */
     switch (type->type) {
         case FFI_TYPE_SINT8:
         case FFI_TYPE_UINT8:
@@ -221,40 +213,34 @@ static void* lua_to_cvalue(lua_State* L, int idx, ffi_type* type) {
         case FFI_TYPE_UINT64: {
             lua_Integer val = luaL_checkinteger(L, idx);
             size_t sz = type->size;
-            void* buf = alloca(sz);
-            if (sz == 1)      *(uint8_t*) buf = (uint8_t) val;
-            else if (sz == 2) *(uint16_t*)buf = (uint16_t)val;
-            else if (sz == 4) *(uint32_t*)buf = (uint32_t)val;
-            else if (sz == 8) *(uint64_t*)buf = (uint64_t)val;
-            return buf;
+            if (sz == 1)      *(uint8_t*) out = (uint8_t) val;
+            else if (sz == 2) *(uint16_t*)out = (uint16_t)val;
+            else if (sz == 4) *(uint32_t*)out = (uint32_t)val;
+            else if (sz == 8) *(uint64_t*)out = (uint64_t)val;
+            break;
         }
         case FFI_TYPE_FLOAT: {
             float val = (float)luaL_checknumber(L, idx);
-            void* buf = alloca(sizeof(float));
-            *(float*)buf = val;
-            return buf;
+            *(float*)out = val;
+            break;
         }
         case FFI_TYPE_DOUBLE: {
             double val = luaL_checknumber(L, idx);
-            void* buf = alloca(sizeof(double));
-            *(double*)buf = val;
-            return buf;
+            *(double*)out = val;
+            break;
         }
         case FFI_TYPE_LONGDOUBLE: {
             long double val = (long double)luaL_checknumber(L, idx);
-            void* buf = alloca(sizeof(long double));
-            *(long double*)buf = val;
-            return buf;
+            *(long double*)out = val;
+            break;
         }
         case FFI_TYPE_POINTER: {
-            void* ptr = lua_touserdata(L, idx);   // lightuserdata 或 full userdata
-            void* buf = alloca(sizeof(void*));
-            *(void**)buf = ptr;
-            return buf;
+            void* ptr = lua_touserdata(L, idx);
+            *(void**)out = ptr;
+            break;
         }
         default:
-            luaL_error(L, "Unsupported ffi_type: %d", type->type);
-            return NULL;
+            luaL_error(L, "LuaHook: Unsupported ffi_type: %d", type->type);
     }
 }
 
@@ -262,7 +248,7 @@ static void* lua_to_cvalue(lua_State* L, int idx, ffi_type* type) {
 static void lua_push_cvalue(lua_State* L, void* value, ffi_type* type) {
     if (type->type == FFI_TYPE_STRUCT) {
         Structure* st = get_structure(type);
-        if (!st) luaL_error(L, "Unknown structure type");
+        if (!st) luaL_error(L, "LuaHook: Unknown structure type");
         lua_newtable(L);
         ffi_type** elems = type->elements;
         size_t* offsets = st->offsets;
@@ -316,16 +302,16 @@ static void lua_push_cvalue(lua_State* L, void* value, ffi_type* type) {
 /* ---------- enterNativeFunction __call 元方法 ---------- */
 int enterNativeFunction(lua_State* L) {
     NativeFunction** ud = (NativeFunction**)lua_touserdata(L, 1);
-    if (!ud) luaL_error(L, "Expected NativeFunction userdata");
+    if (!ud) luaL_error(L, "LuaHook: Expected NativeFunction userdata");
     NativeFunction* nf = *ud;
-    if (!nf) luaL_error(L, "NativeFunction is NULL");
+    if (!nf) luaL_error(L, "LuaHook: NativeFunction is NULL");
 
     int nargs = lua_gettop(L) - 1;
 
     /* ---------- 可变参数分支 ---------- */
     if (nf->is_variadic) {
         if (nargs < nf->nfixed)
-            luaL_error(L, "Not enough arguments (need at least %d)", nf->nfixed);
+            luaL_error(L, "LuaHook: Not enough arguments (need at least %d)", nf->nfixed);
         int nvar = nargs - nf->nfixed;
         int total = nf->nfixed + nvar;
 
@@ -341,12 +327,15 @@ int enterNativeFunction(lua_State* L) {
         ffi_status s = ffi_prep_cif_var(&cif, FFI_DEFAULT_ABI,
                                         nf->nfixed, total,
                                         nf->ret_type, arg_types);
-        if (s != FFI_OK) luaL_error(L, "ffi_prep_cif_var failed");
+        if (s != FFI_OK) luaL_error(L, "LuaHook: ffi_prep_cif_var failed");
 
         /* 构造参数指针数组 */
         void* args[total];
-        for (int i = 0; i < total; i++)
-            args[i] = lua_to_cvalue(L, i + 2, arg_types[i]);
+        for (int i = 0; i < total; i++) {
+            void* buf = alloca(arg_types[i]->size);          // 分配足够空间
+            lua_to_cvalue(L, i + 2, arg_types[i], buf);      // 填充值
+            args[i] = buf;
+        }
 
         /* 返回值缓冲区 */
         void* ret_buf = NULL;
@@ -371,12 +360,15 @@ int enterNativeFunction(lua_State* L) {
 
     /* ---------- 非可变参数分支（使用预先生成的 cif） ---------- */
     if (nargs != nf->nfixed)
-        luaL_error(L, "NativeFunction: expected %d arguments, got %d",
+        luaL_error(L, "LuaHook: NativeFunction expected %d arguments, got %d",
                    nf->nfixed, nargs);
 
     void* args[nf->nfixed];
-    for (int i = 0; i < nf->nfixed; i++)
-        args[i] = lua_to_cvalue(L, i + 2, nf->fixed_types[i]);
+    for (int i = 0; i < nf->nfixed; i++) {
+        void* buf = alloca(nf->fixed_types[i]->size);          // 分配足够空间
+        lua_to_cvalue(L, i + 2, nf->fixed_types[i], buf);      // 填充值
+        args[i] = buf;
+    }
 
     void* ret_buf = NULL;
     if (nf->ret_type->type != FFI_TYPE_VOID) {
@@ -431,7 +423,7 @@ int wrapNativeFunction(lua_State* L) {
     ffi_type* last_fixed = NULL;
     int i;
     for (i = 0; params_start[i] != NULL; i++) {
-        if (params_start[i] == (ffi_type*)VARIABLE_ARGS) {
+        if (params_start[i] == (ffi_type*)VARIABLE) {
             has_var = 1;
             i++;  // 跳过标记
             break;
@@ -442,19 +434,16 @@ int wrapNativeFunction(lua_State* L) {
     /* 检查标记后是否还有多余参数（违反 ... 语义） */
     if (has_var && params_start[i] != NULL) {
         free(sign_types);
-        luaL_error(L, "Variadic marker '...' must be at the end of signature");
+        luaL_error(L, "LuaHook: Variadic marker '...' must be at the end of signature");
     }
     if (has_var && nfixed == 0)
-        luaL_error(L, "Variadic function must have at least one fixed argument");
+        luaL_error(L, "LuaHook: Variadic function must have at least one fixed argument");
 
     /* ---------- 构建固定参数类型数组 ---------- */
     ffi_type** fixed_types = NULL;
     if (nfixed > 0) {
         fixed_types = malloc(nfixed * sizeof(ffi_type*));
-        if (!fixed_types) {
-            free(sign_types);
-            luaL_error(L, "Out of memory");
-        }
+        LUA_ALLOC_ASSERT(L, fixed_types);
         for (int j = 0; j < nfixed; j++)
             fixed_types[j] = params_start[j];
     }
@@ -495,7 +484,7 @@ int wrapNativeFunction(lua_State* L) {
             free(sign_types);
             free(fixed_types);
             free(nf);
-            luaL_error(L, "ffi_prep_cif failed: %d", status);
+            luaL_error(L, "LuaHook: ffi_prep_cif failed: %d", status);
         }
     }
 
@@ -545,11 +534,8 @@ static void lua_closure_callback(ffi_cif* cif, void* ret, void** args, void* use
 
     // 处理返回值
     if (info->ret_type->type != FFI_TYPE_VOID) {
-        // 将 Lua 返回值转换为 C 值并复制到 ret
-        void* val = lua_to_cvalue(L, -1, info->ret_type);  // 临时缓冲区
-        size_t sz = info->ret_type->size;
-        memcpy(ret, val, sz);
-        lua_pop(L, 1);  // 弹出返回值
+        lua_to_cvalue(L, -1, info->ret_type, ret);      // 直接写入 ret 指向的内存
+        lua_pop(L, 1);
     }
 
     // 恢复栈
@@ -579,7 +565,7 @@ int wrapLuaFunction(lua_State* L) {
     }
     // 检查可变参数标记（closure 不支持）
     for (int i = 1; sign_types[i] != NULL; i++) {
-        if (sign_types[i] == (ffi_type*)VARIABLE_ARGS) {
+        if (sign_types[i] == (ffi_type*)VARIABLE) {
             free(sign_types);
             luaL_error(L, "LuaHook: variadic arguments not supported in closure");
         }
@@ -618,12 +604,8 @@ int wrapLuaFunction(lua_State* L) {
     info->writable = closure;
 
     // 7. 准备 ffi_cif
-    ffi_type* atypes[nargs];
-    for (int i = 0; i < nargs; i++) {
-        atypes[i] = sign_types[i + 1];
-    }
     ffi_status status = ffi_prep_cif(&info->cif, FFI_DEFAULT_ABI, nargs,
-                                      info->ret_type, atypes);
+                                  info->ret_type, info->arg_types);
     if (status != FFI_OK) {
         luaL_unref(L, LUA_REGISTRYINDEX, info->func_ref);
         ffi_closure_free(closure);

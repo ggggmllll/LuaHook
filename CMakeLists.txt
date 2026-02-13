@@ -42,4 +42,4 @@ target_link_directories(LuaHook PRIVATE lua)
 target_link_directories(LuaHook PRIVATE libffi/out/lib)
 
 add_dependencies(LuaHook Lua libffi)
-target_link_libraries(LuaHook PRIVATE lua ffi)
+target_link_libraries(LuaHook PRIVATE lua ffi m)
