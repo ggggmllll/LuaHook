@@ -28,23 +28,11 @@ local function registerArray(name, element_type, size)
     registerStruct(name, signature)
 end
 
--- 注册联合体（通过结构体模拟，但需注意：这不等同于真正的联合体）
-local function registerUnion(name, ...)
-    -- 构建结构体签名：多个字段
-    local signature = ""
-    local types = {...}
-    for i, t in ipairs(types) do
-        signature = signature .. t
-    end
-    registerStruct(name, signature)
-end
-
 -- 主模块
 local LuaHook = {
     types = types,
     registerStruct = luahook.registerStruct,
     registerArray = registerArray,
-    registerUnion = registerUnion,
     setAbi = luahook.setAbi,
     unregisterStruct = luahook.unregisterStruct,
     wrapNative = luahook.wrapNative,
