@@ -1,4 +1,6 @@
-# LuaFFI: 动态C函数绑定库
+[**中文**](README.md) | [**English**](README_en.md)
+
+# LuaHook: 动态C函数绑定库
 
 一个基于 libffi 的 Lua 扩展库，实现 Lua 与 C 的双向高效调用。支持结构体传递、可变参数函数、ABI 选择等特性，无需编写胶水代码即可直接调用任意 C 函数或将 Lua 函数暴露给 C 使用。
 
