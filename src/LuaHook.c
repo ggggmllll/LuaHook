@@ -511,6 +511,15 @@ int wrapNativeFunction(lua_State* L) {
 /* ---------- 闭包回调函数 ---------- */
 static void lua_closure_callback(ffi_cif* cif, void* ret, void** args, void* user_data) {
     LuaClosureInfo* info = (LuaClosureInfo*)user_data;
+
+    // 检查当前线程是否与创建闭包的线程一致
+    if (!pthread_equal(pthread_self(), info->tid)) {
+        fprintf(stderr, "Fatal: Lua closure called from wrong thread "
+                "(expected %lu, got %lu)\n",
+                (unsigned long)info->tid, (unsigned long)pthread_self());
+        abort();   // 直接终止，避免跨线程操作 Lua 状态
+    }
+
     lua_State* L = info->L;
     int top = lua_gettop(L);
 
@@ -585,6 +594,7 @@ int wrapLuaFunction(lua_State* L) {
     info->ret_type = sign_types[0];
     info->arg_types = sign_types + 1;
     info->nargs = nargs;
+    info->tid = pthread_self();   // 记录创建线程
 
     // 5. 获取函数引用（存入注册表）
     lua_pushvalue(L, -1);               // 复制函数

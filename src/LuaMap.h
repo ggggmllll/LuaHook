@@ -15,6 +15,7 @@ typedef struct LuaClosureInfo {
     void* writable;              // 可写地址（用于 ffi_closure_free）
     ffi_cif cif;                 // 预先生成的 ffi_cif
     ffi_type** sign_base;        // parse_string_fsm 返回的原始数组，用于释放
+    pthread_t tid;   // 新增：创建该闭包的线程 ID
 } LuaClosureInfo;
 
 /* ---------- 全局映射：可执行地址 -> LuaClosureInfo ---------- */
