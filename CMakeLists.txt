@@ -2,6 +2,8 @@ cmake_minimum_required(VERSION 3.25.0)
 
 project(LuaHook)
 
+find_package(XShare REQUIRED)
+
 include(ExternalProject)
 
 find_program(MAKE_EXE make)
@@ -42,7 +44,7 @@ target_link_directories(LuaHook PRIVATE lua)
 target_link_directories(LuaHook PRIVATE libffi/out/lib)
 
 add_dependencies(LuaHook Lua libffi)
-target_link_libraries(LuaHook PRIVATE lua ffi m)
+target_link_libraries(LuaHook PRIVATE lua ffi m XShare::XShare)
 
 if(BUILD_STATIC_LIB)
     set(STATIC_LIB_NAME ${PROJECT_NAME}-static)    #设置静态库的原始名称
@@ -50,5 +52,5 @@ if(BUILD_STATIC_LIB)
     add_library(${STATIC_LIB_NAME} STATIC $<TARGET_OBJECTS:${PROJECT_NAME}>)
     set_target_properties(${STATIC_LIB_NAME} PROPERTIES OUTPUT_NAME ${PROJECT_NAME})
     
-    target_link_libraries(${STATIC_LIB_NAME} PRIVATE lua ffi m)
+    target_link_libraries(${STATIC_LIB_NAME} PRIVATE lua ffi m XShare::XShare)
 endif()

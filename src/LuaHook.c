@@ -681,6 +681,220 @@ int getString(lua_State* L) {
     return 1;
 }
 
+static lua_State* get_thread_lua_state(void) {
+    pthread_once(&key_once, create_key);
+    lua_State* L = pthread_getspecific(lua_state_key);
+    if (!L) {
+        L = luaL_newstate();
+        luaL_openlibs(L);
+        luaopen_XShare(L);   // 注册 XShare 模块
+        lua_pop(L, 1);        // 弹出模块表
+        pthread_setspecific(lua_state_key, L);
+    }
+    return L;
+}
+
+static void map_insert_mt(void* code, LuaClosureInfoMT* info) {
+    unsigned int h = (unsigned long)code % 256;
+    pthread_mutex_lock(&map_mutex_mt);
+    MapEntryMT* e = malloc(sizeof(MapEntryMT));
+    e->code = code;
+    e->info = info;
+    e->next = map_mt[h];
+    map_mt[h] = e;
+    pthread_mutex_unlock(&map_mutex_mt);
+}
+
+static LuaClosureInfoMT* map_find_mt(void* code) {
+    unsigned int h = (unsigned long)code % 256;
+    pthread_mutex_lock(&map_mutex_mt);
+    MapEntryMT* e = map_mt[h];
+    while (e) {
+        if (e->code == code) {
+            pthread_mutex_unlock(&map_mutex_mt);
+            return e->info;
+        }
+        e = e->next;
+    }
+    pthread_mutex_unlock(&map_mutex_mt);
+    return NULL;
+}
+
+static void map_remove_mt(void* code) {
+    unsigned int h = (unsigned long)code % 256;
+    pthread_mutex_lock(&map_mutex_mt);
+    MapEntryMT** p = &map_mt[h];
+    while (*p) {
+        if ((*p)->code == code) {
+            MapEntryMT* tmp = *p;
+            *p = (*p)->next;
+            free(tmp);
+            break;
+        }
+        p = &(*p)->next;
+    }
+    pthread_mutex_unlock(&map_mutex_mt);
+}
+
+/* ---------- 多线程闭包回调函数 ---------- */
+static void lua_closure_callback_mt(ffi_cif* cif, void* ret, void** args, void* user_data) {
+    LuaClosureInfoMT* info = (LuaClosureInfoMT*)user_data;
+    lua_State* L = get_thread_lua_state();
+    if (!L) {
+        fprintf(stderr, "Fatal: cannot get Lua state for current thread\n");
+        abort();
+    }
+    int top = lua_gettop(L);
+
+    // 还原 Lua 函数
+    stored_push(L, info->func_obj);
+
+    // 压入参数（假设已存在 lua_push_cvalue 函数）
+    for (int i = 0; i < info->nargs; i++) {
+        lua_push_cvalue(L, args[i], info->arg_types[i]);
+    }
+
+    // 调用
+    if (lua_pcall(L, info->nargs, 1, 0) != LUA_OK) {
+        const char* err = lua_tostring(L, -1);
+        fprintf(stderr, "Lua closure error: %s\n", err);
+        // 错误时，可考虑设置默认返回值或继续抛出（但跨线程 longjmp 危险）
+        lua_settop(L, top);
+        return;
+    }
+
+    // 处理返回值
+    if (info->ret_type->type != FFI_TYPE_VOID) {
+        lua_to_cvalue(L, -1, info->ret_type, ret);
+        lua_pop(L, 1);
+    }
+    lua_settop(L, top);
+}
+
+/* ---------- wrapLuaFunctionMT：创建多线程安全闭包 ---------- */
+int wrapLuaFunctionMT(lua_State* L) {
+    // 参数检查：两个字符串
+    if (lua_gettop(L) != 2)
+        return luaL_error(L, "wrapLuaFunctionMT: expected exactly 2 arguments");
+    if (!lua_isstring(L, 1) || !lua_isstring(L, 2))
+        return luaL_error(L, "wrapLuaFunctionMT: both arguments must be strings");
+
+    const char* func_name = lua_tostring(L, 1);
+    const char* sign = lua_tostring(L, 2);
+
+    // 1. 获取 Lua 函数
+    lua_getglobal(L, func_name);
+    if (!lua_isfunction(L, -1)) {
+        return luaL_error(L, "wrapLuaFunctionMT: %s is not a function", func_name);
+    }
+
+    // 2. 解析签名（假设已有 parse_string_fsm 函数）
+    ffi_type** sign_types = parse_string_fsm(sign);
+    if (!sign_types || !sign_types[0]) {
+        free(sign_types);
+        return luaL_error(L, "wrapLuaFunctionMT: invalid signature (missing return type)");
+    }
+    // 检查可变参数标记（不支持）
+    for (int i = 1; sign_types[i] != NULL; i++) {
+        if (sign_types[i] == (ffi_type*)VARIABLE) {
+            free(sign_types);
+            return luaL_error(L, "wrapLuaFunctionMT: variadic arguments not supported");
+        }
+    }
+
+    // 计算参数个数
+    int nargs = 0;
+    while (sign_types[nargs + 1] != NULL) nargs++;
+
+    // 3. 序列化函数
+    StoredObject* func_obj = stored_create(L, -1);  // 栈顶是函数
+    if (!func_obj) {
+        free(sign_types);
+        return luaL_error(L, "wrapLuaFunctionMT: failed to serialize function");
+    }
+
+    // 4. 分配信息结构
+    LuaClosureInfoMT* info = malloc(sizeof(LuaClosureInfoMT));
+    if (!info) {
+        free(sign_types);
+        gc_release((GCObject*)func_obj);
+        return luaL_error(L, "wrapLuaFunctionMT: out of memory");
+    }
+    info->func_obj = func_obj;
+    info->sign_base = sign_types;
+    info->ret_type = sign_types[0];
+    info->arg_types = sign_types + 1;
+    info->nargs = nargs;
+
+    // 5. 分配 closure
+    void* code;
+    ffi_closure* closure = ffi_closure_alloc(sizeof(ffi_closure), &code);
+    if (!closure) {
+        free(sign_types);
+        gc_release((GCObject*)func_obj);
+        free(info);
+        return luaL_error(L, "wrapLuaFunctionMT: ffi_closure_alloc failed");
+    }
+    info->writable = closure;
+
+    // 6. 准备 ffi_cif
+    ffi_status status = ffi_prep_cif(&info->cif, FFI_DEFAULT_ABI, nargs,
+                                      info->ret_type, info->arg_types);
+    if (status != FFI_OK) {
+        ffi_closure_free(closure);
+        free(sign_types);
+        gc_release((GCObject*)func_obj);
+        free(info);
+        return luaL_error(L, "wrapLuaFunctionMT: ffi_prep_cif failed");
+    }
+
+    // 7. 准备 closure
+    status = ffi_prep_closure_loc(closure, &info->cif, lua_closure_callback_mt,
+                                   info, code);
+    if (status != FFI_OK) {
+        ffi_closure_free(closure);
+        free(sign_types);
+        gc_release((GCObject*)func_obj);
+        free(info);
+        return luaL_error(L, "wrapLuaFunctionMT: ffi_prep_closure_loc failed");
+    }
+
+    // 8. 插入映射
+    map_insert_mt(code, info);
+
+    // 9. 返回可执行地址
+    lua_pushlightuserdata(L, code);
+    return 1;
+}
+
+/* ---------- unwrapLuaFunctionMT：释放多线程闭包 ---------- */
+int unwrapLuaFunctionMT(lua_State* L) {
+    if (lua_gettop(L) != 1)
+        return luaL_error(L, "unwrapLuaFunctionMT: expected exactly 1 argument");
+    if (!lua_islightuserdata(L, 1))
+        return luaL_error(L, "unwrapLuaFunctionMT: argument must be lightuserdata");
+
+    void* code = lua_touserdata(L, 1);
+    LuaClosureInfoMT* info = map_find_mt(code);
+    if (!info) return 0;   // 未找到，可能已释放
+
+    map_remove_mt(code);
+
+    // 释放序列化函数
+    gc_release((GCObject*)info->func_obj);
+
+    // 释放 closure
+    ffi_closure_free(info->writable);
+
+    // 释放签名数组
+    free(info->sign_base);
+
+    // 释放信息结构
+    free(info);
+
+    return 0;
+}
+
 int luaopen_LuaHook(lua_State* L) {
     /* 初始化全局结构体映射（确保 __g_struct_map 已创建） */
     INIT_STRUCTMAP(32);
@@ -715,6 +929,12 @@ int luaopen_LuaHook(lua_State* L) {
 
     lua_pushcfunction(L, unwrapLuaFunction);
     lua_setfield(L, -2, "unwrapLua");
+
+    lua_pushcfunction(L, wrapLuaFunctionMT);
+    lua_setfield(L, -2, "wrapLuaMT");
+
+    lua_pushcfunction(L, unwrapLuaFunctionMT);
+    lua_setfield(L, -2, "unwrapLuaMT");
 
     lua_pushcfunction(L, getString);
     lua_setfield(L, -2, "getString");
