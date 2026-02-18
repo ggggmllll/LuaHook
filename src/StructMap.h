@@ -130,7 +130,7 @@ static pthread_once_t __g_struct_map_once = PTHREAD_ONCE_INIT;
 
 static void __struct_map_init(void) {
     /* 实际初始化函数，只执行一次 */
-    StructMap* __map = malloc(sizeof(StructMap));
+    StructMap* __map = (StructMap*) malloc(sizeof(StructMap));
     if (__map) {
         __map->size = 0;        // 占位，后面会通过宏设置
         __map->count = 0;
@@ -271,7 +271,7 @@ static void __struct_map_init(void) {
 // ==================== 非 GNU C 的内联函数版本 ====================
 static inline int init_structmap(size_t size) {
     if (!__g_struct_map) return 1;
-    StructMap* map = malloc(sizeof(StructMap));
+    StructMap* map = (StructMap*) malloc(sizeof(StructMap));
     if (!map) return 0;
     
     map->size = size;

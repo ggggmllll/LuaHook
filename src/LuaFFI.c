@@ -2,7 +2,7 @@
 #include "lua.h"
 #include "lauxlib.h"
 #include <stddef.h>
-#include "LuaHook.h"
+#include "LuaFFI.h"
 
 /* ---------- container_of 宏（从 ffi_type* 获得 Structure*） ---------- */
 #ifndef container_of
@@ -20,7 +20,7 @@ static inline Structure* get_structure(ffi_type* type) {
 #define LUA_ARGC_ASSERT(L, num) \
     do { \
         if (lua_gettop(L) != (num)) \
-            luaL_error(L, "LuaHook: %s expected %d arguments", __func__, (num)); \
+            luaL_error(L, "LuaFFI: %s expected %d arguments", __func__, (num)); \
     } while (0)
 
 /* 参数类型检查 */
@@ -28,21 +28,21 @@ static inline Structure* get_structure(ffi_type* type) {
     do { \
         int __idx = (idx); \
         if (!lua_is##type(L, __idx)) \
-            luaL_error(L, "LuaHook: %s's argument %d needs type %s", \
+            luaL_error(L, "LuaFFI: %s's argument %d needs type %s", \
                        __func__, __idx, #type); \
     } while (0)
 
 #define LUA_ALLOC_ASSERT(L, mem) \
     do { \
         if (!mem) \
-            luaL_error(L, "LuaHook: %s failed to alloc mem", __func__); \
+            luaL_error(L, "LuaFFI: %s failed to alloc mem", __func__); \
     } while(0)
 
 #define LUA_FUNC_PARSE_ASSERT(L, result) \
     do { \
         LUA_ALLOC_ASSERT(L, result); \
         if (!result[0] || !result[1]) \
-            luaL_error(L, "LuaHook: %s's signature need a ret-value and one argument at least", __func__); \
+            luaL_error(L, "LuaFFI: %s's signature need a ret-value and one argument at least", __func__); \
     } while(0)
 
 static inline ffi_type** parse_string_fsm(const char* str) {
@@ -132,7 +132,7 @@ int setAbi(lua_State* L) {
     LUA_ARGC_ASSERT(L, 1);
     LUA_TYPE_ASSERT(L, integer, 1);
     ffi_abi abi = lua_tointeger(L, 1);
-    if (abi < FFI_FIRST_ABI || abi > FFI_DEFAULT_ABI) luaL_error(L, "LuaHook: bad abi");
+    if (abi < FFI_FIRST_ABI || abi > FFI_DEFAULT_ABI) luaL_error(L, "LuaFFI: bad abi");
     __g_abi = abi;
     return 0;
 }
@@ -170,7 +170,7 @@ int registerStructType(lua_State* L) {
     STRUCTMAP_PUT(key, type);
     
     if (ffi_get_struct_offsets(__g_abi, &STRUCTMAP_GET(key)->type, offsets) == FFI_BAD_TYPEDEF) 
-        luaL_error(L, "LuaHook: bad typedef");
+        luaL_error(L, "LuaFFI: bad typedef");
     
     return 0;
 }
@@ -187,7 +187,7 @@ int unregisterStructType(lua_State* L) {
 static void lua_to_cvalue(lua_State* L, int idx, ffi_type* type, void* out) {
     if (type->type == FFI_TYPE_STRUCT) {
         Structure* st = get_structure(type);
-        if (!st) luaL_error(L, "LuaHook: Unknown structure type");
+        if (!st) luaL_error(L, "LuaFFI: Unknown structure type");
         luaL_checktype(L, idx, LUA_TTABLE);
 
         ffi_type** elems = type->elements;
@@ -239,7 +239,7 @@ static void lua_to_cvalue(lua_State* L, int idx, ffi_type* type, void* out) {
             break;
         }
         default:
-            luaL_error(L, "LuaHook: Unsupported ffi_type: %d", type->type);
+            luaL_error(L, "LuaFFI: Unsupported ffi_type: %d", type->type);
     }
 }
 
@@ -247,7 +247,7 @@ static void lua_to_cvalue(lua_State* L, int idx, ffi_type* type, void* out) {
 static void lua_push_cvalue(lua_State* L, void* value, ffi_type* type) {
     if (type->type == FFI_TYPE_STRUCT) {
         Structure* st = get_structure(type);
-        if (!st) luaL_error(L, "LuaHook: Unknown structure type");
+        if (!st) luaL_error(L, "LuaFFI: Unknown structure type");
         lua_newtable(L);
         ffi_type** elems = type->elements;
         size_t* offsets = st->offsets;
@@ -301,16 +301,16 @@ static void lua_push_cvalue(lua_State* L, void* value, ffi_type* type) {
 /* ---------- enterNativeFunction __call 元方法 ---------- */
 int enterNativeFunction(lua_State* L) {
     NativeFunction** ud = (NativeFunction**)lua_touserdata(L, 1);
-    if (!ud) luaL_error(L, "LuaHook: Expected NativeFunction userdata");
+    if (!ud) luaL_error(L, "LuaFFI: Expected NativeFunction userdata");
     NativeFunction* nf = *ud;
-    if (!nf) luaL_error(L, "LuaHook: NativeFunction is NULL");
+    if (!nf) luaL_error(L, "LuaFFI: NativeFunction is NULL");
 
     int nargs = lua_gettop(L) - 1;
 
     /* ---------- 可变参数分支 ---------- */
     if (nf->is_variadic) {
         if (nargs < nf->nfixed)
-            luaL_error(L, "LuaHook: Not enough arguments (need at least %d)", nf->nfixed);
+            luaL_error(L, "LuaFFI: Not enough arguments (need at least %d)", nf->nfixed);
         int nvar = nargs - nf->nfixed;
         int total = nf->nfixed + nvar;
 
@@ -326,7 +326,7 @@ int enterNativeFunction(lua_State* L) {
         ffi_status s = ffi_prep_cif_var(&cif, FFI_DEFAULT_ABI,
                                         nf->nfixed, total,
                                         nf->ret_type, arg_types);
-        if (s != FFI_OK) luaL_error(L, "LuaHook: ffi_prep_cif_var failed");
+        if (s != FFI_OK) luaL_error(L, "LuaFFI: ffi_prep_cif_var failed");
 
         /* 构造参数指针数组 */
         void* args[total];
@@ -359,7 +359,7 @@ int enterNativeFunction(lua_State* L) {
 
     /* ---------- 非可变参数分支（使用预先生成的 cif） ---------- */
     if (nargs != nf->nfixed)
-        luaL_error(L, "LuaHook: NativeFunction expected %d arguments, got %d",
+        luaL_error(L, "LuaFFI: NativeFunction expected %d arguments, got %d",
                    nf->nfixed, nargs);
 
     void* args[nf->nfixed];
@@ -433,10 +433,10 @@ int wrapNativeFunction(lua_State* L) {
     /* 检查标记后是否还有多余参数（违反 ... 语义） */
     if (has_var && params_start[i] != NULL) {
         free(sign_types);
-        luaL_error(L, "LuaHook: Variadic marker '...' must be at the end of signature");
+        luaL_error(L, "LuaFFI: Variadic marker '...' must be at the end of signature");
     }
     if (has_var && nfixed == 0)
-        luaL_error(L, "LuaHook: Variadic function must have at least one fixed argument");
+        luaL_error(L, "LuaFFI: Variadic function must have at least one fixed argument");
 
     /* ---------- 构建固定参数类型数组 ---------- */
     ffi_type** fixed_types = NULL;
@@ -483,7 +483,7 @@ int wrapNativeFunction(lua_State* L) {
             free(sign_types);
             free(fixed_types);
             free(nf);
-            luaL_error(L, "LuaHook: ffi_prep_cif failed: %d", status);
+            luaL_error(L, "LuaFFI: ffi_prep_cif failed: %d", status);
         }
     }
 
@@ -562,20 +562,20 @@ int wrapLuaFunction(lua_State* L) {
     // 1. 获取 Lua 函数
     lua_getglobal(L, func_name);
     if (!lua_isfunction(L, -1)) {
-        luaL_error(L, "LuaHook: %s is not a function", func_name);
+        luaL_error(L, "LuaFFI: %s is not a function", func_name);
     }
 
     // 2. 解析签名
     ffi_type** sign_types = parse_string_fsm(sign);
     if (!sign_types || !sign_types[0]) {
         free(sign_types);
-        luaL_error(L, "LuaHook: invalid signature (missing return type)");
+        luaL_error(L, "LuaFFI: invalid signature (missing return type)");
     }
     // 检查可变参数标记（closure 不支持）
     for (int i = 1; sign_types[i] != NULL; i++) {
         if (sign_types[i] == (ffi_type*)VARIABLE) {
             free(sign_types);
-            luaL_error(L, "LuaHook: variadic arguments not supported in closure");
+            luaL_error(L, "LuaFFI: variadic arguments not supported in closure");
         }
     }
 
@@ -587,7 +587,7 @@ int wrapLuaFunction(lua_State* L) {
     LuaClosureInfo* info = malloc(sizeof(LuaClosureInfo));
     if (!info) {
         free(sign_types);
-        luaL_error(L, "LuaHook: out of memory");
+        luaL_error(L, "LuaFFI: out of memory");
     }
     info->L = L;
     info->sign_base = sign_types;
@@ -608,7 +608,7 @@ int wrapLuaFunction(lua_State* L) {
         luaL_unref(L, LUA_REGISTRYINDEX, info->func_ref);
         free(sign_types);
         free(info);
-        luaL_error(L, "LuaHook: ffi_closure_alloc failed");
+        luaL_error(L, "LuaFFI: ffi_closure_alloc failed");
     }
     info->writable = closure;
 
@@ -620,7 +620,7 @@ int wrapLuaFunction(lua_State* L) {
         ffi_closure_free(closure);
         free(sign_types);
         free(info);
-        luaL_error(L, "LuaHook: ffi_prep_cif failed");
+        luaL_error(L, "LuaFFI: ffi_prep_cif failed");
     }
 
     // 8. 准备 closure
@@ -631,7 +631,7 @@ int wrapLuaFunction(lua_State* L) {
         ffi_closure_free(closure);
         free(sign_types);
         free(info);
-        luaL_error(L, "LuaHook: ffi_prep_closure_loc failed");
+        luaL_error(L, "LuaFFI: ffi_prep_closure_loc failed");
     }
 
     // 9. 插入映射
@@ -895,7 +895,7 @@ int unwrapLuaFunctionMT(lua_State* L) {
     return 0;
 }
 
-int luaopen_LuaHook(lua_State* L) {
+int luaopen_LuaFFI(lua_State* L) {
     /* 初始化全局结构体映射（确保 __g_struct_map 已创建） */
     INIT_STRUCTMAP(32);
 

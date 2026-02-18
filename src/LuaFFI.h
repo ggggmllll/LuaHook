@@ -35,4 +35,4 @@ typedef struct NativeFunction {
     ffi_type**  sign_base;      // parse_string_fsm 返回的原始数组，用于释放
 } NativeFunction;
 
-int luaopen_LuaHook(lua_State* L);
+int luaopen_LuaFFI(lua_State* L);
