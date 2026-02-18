@@ -1,9 +1,15 @@
+#ifndef LUAFFI_H
+#define LUAFFI_H
 #include "ffi.h"
 #include "StructMap.h"
 #include "LuaMap.h"
 
 #define MATCH_NATIVE_TYPE(type) (__native_type_map[type])
 #define VARIABLE ((ffi_type*) -1)
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 static ffi_type* __native_type_map[128] = {
     ['v'] = &ffi_type_void,
@@ -36,3 +42,9 @@ typedef struct NativeFunction {
 } NativeFunction;
 
 int luaopen_LuaFFI(lua_State* L);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif
