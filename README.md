@@ -1,6 +1,6 @@
 [**中文**](README.md) | [**English**](README_en.md)
 
-# LuaHook: 动态C函数绑定库
+# LuaFFI: 动态C函数绑定库
 
 一个基于 libffi 的 Lua 扩展库，实现 Lua 与 C 的双向高效调用。支持结构体传递、可变参数函数、ABI 选择等特性，无需编写胶水代码即可直接调用任意 C 函数或将 Lua 函数暴露给 C 使用。
 
@@ -26,40 +26,40 @@
 
 所有函数通过模块表导出。
 
-### `LuaHook.setAbi(abi)`
+### `LuaFFI.setAbi(abi)`
 设置全局 FFI ABI 编号。参数为整数，取值范围为 `[FFI_FIRST_ABI, FFI_DEFAULT_ABI]`（由 libffi 定义）。默认使用FFI_DEFAULT_ABI，通常无需额外设置。
 
-### `LuaHook.registerStruct(name, signature)`
+### `LuaFFI.registerStruct(name, signature)`
 注册一个 C 结构体类型。
 - `name`：字符串，结构体名称（后续签名中可用）
 - `signature`：字符串，字段类型列表，例如 `"ii"` 表示两个 `int` 字段。
   签名格式：自定义的结构体类型用 `|` 包围。
 
-### `LuaHook.unregisterStruct(name)`
+### `LuaFFI.unregisterStruct(name)`
 注销已注册的结构体。
 
-### `LuaHook.wrapNative(ptr, signature) -> userdata`
+### `LuaFFI.wrapNative(ptr, signature) -> userdata`
 将 C 函数指针包装为 Lua 可调用的对象。
 - `ptr`：lightuserdata，C 函数地址
 - `signature`：字符串，函数签名，格式 `"<返回类型><参数1>[参数2][...]"`。若为可变参数，在最后加 `...` 标记（例如 `"ip..."`）。签名格式：自定义的结构体类型用 `|` 包围。
 - 返回值：full userdata，带有 `__call` 元方法，可直接在 Lua 中调用。
 
-### `LuaHook.wrapLua(func_name, signature) -> lightuserdata`
+### `LuaFFI.wrapLua(func_name, signature) -> lightuserdata`
 将 Lua 函数包装为 C 函数指针（通过 libffi closure）。
 - `func_name`：字符串，全局 Lua 函数名
 - `signature`：字符串，签名格式同 `wrapNative`，但**不支持可变参数**（即不能包含 `...`）
 - 返回值：lightuserdata，即生成的 C 函数可执行地址，可传递给需要 C 回调的 API。
 
-### `LuaHook.unwrapLua(code)`
+### `LuaFFI.unwrapLua(code)`
 释放由 `wrapLua` 创建的闭包资源。
 - `code`：lightuserdata，之前返回的可执行地址。
 
-### `LuaHook.getString(ptr)`
+### `LuaFFI.getString(ptr)`
 从 `char*` 指针获取字符串
 - `ptr`：lightuserdata，字符串地址。
 - 返回值：对应地址处字符串。
 
-### `LuaHook.wrapLuaMT(func_name, signature) -> lightuserdata`
+### `LuaFFI.wrapLuaMT(func_name, signature) -> lightuserdata`
 多线程安全版本的 `wrapLua`。与 `wrapLua` 的区别在于，它通过 `xshare` 库将 Lua 函数序列化，生成的 C 闭包可以在任意线程中安全调用，而不会破坏 Lua 状态。每个线程在首次调用该闭包时会自动创建独立的 Lua 状态，并在该状态中执行 Lua 函数，因此可以并发使用。
 
 - `func_name`：字符串，全局 Lua 函数名。
@@ -72,7 +72,7 @@
 - 闭包的回调函数内部会自动处理 Lua 状态的创建与销毁，无需用户干预。
 - 不再使用时，必须调用 `unwrapLuaMT` 释放资源。
 
-### `LuaHook.unwrapLuaMT(code)`
+### `LuaFFI.unwrapLuaMT(code)`
 释放由 `wrapLuaMT` 创建的闭包资源。
 - `code`：lightuserdata，之前返回的可执行地址。
 
@@ -105,28 +105,28 @@
 ## 📝 使用示例
 
 ```lua
-local luahook = require("LuaHook")
+local ffi = require("LuaFFI")
 
 -- 设置 ABI（通常默认 0）
-luahook.setAbi(0)
+ffi.setAbi(0)
 
 -- 注册结构体 Point { int x, int y }
-luahook.registerStruct("Point", "ii")
-luahook.registerArray()
+ffi.registerStruct("Point", "ii")
+ffi.registerArray()
 
 -- 假设有一个 C 函数：int add(int a, int b);
 -- ptr_add 是通过其他方式获得的 lightuserdata
-local add = luahook.wrapNative(ptr_add, "ii")
+local add = ffi.wrapNative(ptr_add, "ii")
 local result = add(3, 5)   -- 返回 8
 
 -- 假设 C 函数：void print_point(Point* p);
 -- ptr_print_point 是函数指针
-local print_point = luahook.wrapNative(ptr_print_point, "vp")
+local print_point = ffi.wrapNative(ptr_print_point, "vp")
 local point = {10, 20}     -- Lua 数组表示 Point
 print_point(point)          -- C 函数接收指针，自动转换
 
 -- 可变参数 C 函数：int sum(int count, ...);
-local sum = luahook.wrapNative(ptr_sum, "ii...")
+local sum = ffi.wrapNative(ptr_sum, "ii...")
 -- 可变参数部分重复最后一个固定参数类型（int），并提升
 print(sum(3, 1, 2, 3))      -- 输出 6
 
@@ -134,10 +134,10 @@ print(sum(3, 1, 2, 3))      -- 输出 6
 function lua_add(a, b)
     return a + b
 end
-local c_callback = luahook.wrapLua("lua_add", "iii")
+local c_callback = ffi.wrapLua("lua_add", "iii")
 -- 可将 c_callback 传递给需要 C 回调的 API
 -- 不再使用时释放
-luahook.unwrapLua(c_callback)
+ffi.unwrapLua(c_callback)
 
 
 -- 注册一个 C 数组类型。

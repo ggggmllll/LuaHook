@@ -1,6 +1,6 @@
 [**中文**](README.md) | [**English**](README_en.md)
 
-# LuaHook: A Dynamic C Function Binding Library
+# LuaFFI: A Dynamic C Function Binding Library
 
 A Lua extension library based on libffi that implements efficient bidirectional calls between Lua and C. It supports structure passing, variadic functions, ABI selection, and more, allowing direct invocation of any C function or exposing Lua functions to C without writing glue code.
 
@@ -26,45 +26,56 @@ A Lua extension library based on libffi that implements efficient bidirectional 
 
 All functions are exported through the module table.
 
-### `LuaHook.setAbi(abi)`
+### `LuaFFI.setAbi(abi)`
 Sets the global FFI ABI number. The parameter is an integer within the range `[FFI_FIRST_ABI, FFI_DEFAULT_ABI]` (defined by libffi). Defaults to `FFI_DEFAULT_ABI`; usually no extra configuration is needed.
 
-### `LuaHook.registerStruct(name, signature)`
+### `LuaFFI.registerStruct(name, signature)`
 Registers a C structure type.
 - `name`: string, the structure name (can be used later in signatures)
 - `signature`: string, a list of field types, e.g., `"ii"` for two `int` fields.
   Signature format: custom structure types are enclosed in `|`.
 
-### `LuaHook.unregisterStruct(name)`
+### `LuaFFI.unregisterStruct(name)`
 Unregisters a previously registered structure.
 
-### `LuaHook.wrapNative(ptr, signature) -> userdata`
+### `LuaFFI.wrapNative(ptr, signature) -> userdata`
 Wraps a C function pointer into a Lua callable object.
 - `ptr`: lightuserdata, the C function address
 - `signature`: string, function signature in the format `"<return type><param1>[param2][...]"`. For variadic functions, append a `...` marker at the end (e.g., `"ip..."`). Custom structure types are enclosed in `|`.
 - Returns: full userdata with a `__call` metamethod; can be called directly in Lua.
 
-### `LuaHook.wrapLua(func_name, signature) -> lightuserdata`
+### `LuaFFI.wrapLua(func_name, signature) -> lightuserdata`
 Wraps a Lua function into a C function pointer (via libffi closure).
 - `func_name`: string, the name of a global Lua function
 - `signature`: string, signature format same as `wrapNative`, but **does not support variadic arguments** (i.e., cannot contain `...`)
 - Returns: lightuserdata, the executable address of the generated C function, which can be passed to APIs expecting a C callback.
 
-### `LuaHook.unwrapLua(code)`
+### `LuaFFI.unwrapLua(code)`
 Frees resources allocated by `wrapLua`.
 - `code`: lightuserdata, the executable address returned by `wrapLua`.
 
-### `LuaHook.getString(ptr)`
+### `LuaFFI.getString(ptr)`
 Retrieves a string from a `char*` pointer.
 - `ptr`: lightuserdata, the address of the string.
 - Returns: the string at that address.
 
-### `LuaHook.registerArray(name, element_type, size)`
-Registers a C array type.
-- `name`: string, the array name (can be used later in signatures)
-- `element_type`: string, the element type of the array.
-  Signature format: custom structure types are enclosed in `|`.
-- `size`: integer, the array size
+### `LuaFFI.wrapLuaMT(func_name, signature) -> lightuserdata`
+
+A thread-safe version of `wrapLua`. The difference from `wrapLua` is that it serializes the Lua function via the `xshare` library, generating a C closure that can be safely invoked in any thread without corrupting the Lua state. When the closure is first called in each thread, an independent Lua state is automatically created, and the Lua function is executed within that state, enabling concurrent usage.
+
+- `func_name`: string, the name of the global Lua function.
+- `signature`: string, the signature format is the same as `wrapLua`, **variadic arguments are not supported**.
+- Return value: lightuserdata, which is the executable address of the generated C function, can be passed across threads to APIs requiring C callbacks.
+
+**Notes**:
+- This feature depends on the `xshare` library; ensure it has been loaded before use.
+- Global variables or external resources accessed within the callback must be thread-safe, as the Lua states in different threads are independent of each other.
+- The callback function internally handles the creation and destruction of the Lua state automatically, no user intervention required.
+- The resource must be released by calling `unwrapLuaMT` when no longer needed.
+
+### `LuaFFI.unwrapLuaMT(code)`
+Releases the closure resource created by `wrapLuaMT`.
+- `code`: lightuserdata, the previously returned executable address.
 
 ## 🔢 Type Signature Mapping
 
@@ -95,27 +106,27 @@ Structures are represented in Lua as **arrays**, with elements in the same order
 ## 📝 Usage Examples
 
 ```lua
-local luahook = require("LuaHook")
+local ffi = require("LuaFFI")
 
 -- Set ABI (usually default 0)
-luahook.setAbi(0)
+ffi.setAbi(0)
 
 -- Register structure Point { int x, int y }
-luahook.registerStruct("Point", "ii")
+ffi.registerStruct("Point", "ii")
 
 -- Suppose there is a C function: int add(int a, int b);
 -- ptr_add is a lightuserdata obtained elsewhere
-local add = luahook.wrapNative(ptr_add, "ii")
+local add = ffi.wrapNative(ptr_add, "ii")
 local result = add(3, 5)   -- returns 8
 
 -- Suppose there is a C function: void print_point(Point* p);
 -- ptr_print_point is the function pointer
-local print_point = luahook.wrapNative(ptr_print_point, "vp")
+local print_point = ffi.wrapNative(ptr_print_point, "vp")
 local point = {10, 20}     -- Lua array representing Point
 print_point(point)          -- C function receives a pointer, automatically converted
 
 -- Variadic C function: int sum(int count, ...);
-local sum = luahook.wrapNative(ptr_sum, "ii...")
+local sum = ffi.wrapNative(ptr_sum, "ii...")
 -- Variadic part repeats the last fixed parameter type (int) and is promoted
 print(sum(3, 1, 2, 3))      -- outputs 6
 
@@ -123,10 +134,23 @@ print(sum(3, 1, 2, 3))      -- outputs 6
 function lua_add(a, b)
     return a + b
 end
-local c_callback = luahook.wrapLua("lua_add", "iii")
+local c_callback = ffi.wrapLua("lua_add", "iii")
 -- c_callback can be passed to APIs expecting a C callback
 -- Free when no longer needed
-luahook.unwrapLua(c_callback)
+ffi.unwrapLua(c_callback)
+
+-- Registers a C array type.
+-- name: string, the array name (can be used in subsequent signatures)
+-- element_type: string, the array element type. Signature format: custom struct types are enclosed with `|`.
+-- size: integer, the array size
+local function registerArray(name, element_type, size)
+    -- Construct the struct signature: 'size' fields of the same type
+    local signature = ""
+    for i = 1, size do
+        signature = signature .. element_type
+    end
+    registerStruct(name, signature)
+end
 ```
 
 ## 🔧 Compilation and Dependencies
